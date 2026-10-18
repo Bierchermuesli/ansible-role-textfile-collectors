@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Fleet-wide view of pending apt upgrades, reboots and apt cache freshness. Metrics come from the apt_info collector in ansible-role-textfile-collectors (apt_info.prom via node_exporter's textfile collector).",
+  "description": "Fleet-wide view of pending apt upgrades, reboots and apt cache freshness. Metrics come from the apt_info and deleted_libraries collectors in ansible-role-textfile-collectors (apt_info.prom via node_exporter's textfile collector).",
   "editable": true,
   "graphTooltip": 1,
   "id": null,
@@ -21,7 +21,8 @@
   "tags": [
     "apt",
     "upgrades",
-    "textfile-collectors"
+    "textfile-collectors",
+    "deleted-libraries"
   ],
   "templating": {
     "list": [
@@ -517,8 +518,8 @@
     {
       "id": 8,
       "type": "stat",
-      "title": "autoremovable",
-      "description": "Packages apt autoremove would drop, fleet-wide. Cosmetic.",
+      "title": "restart needed",
+      "description": "Hosts with processes still mapping a shared library that has since been replaced on disk (node_processes_linking_deleted_libraries). Upgrades landed but the services were not restarted. On Proxmox hosts this includes the LXC guests' processes.",
       "gridPos": {
         "x": 21,
         "y": 0,
@@ -536,7 +537,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(apt_autoremove_pending{instance=~\"$instance\"})",
+          "expr": "count(sum by (instance) (node_processes_linking_deleted_libraries{instance=~\"$instance\"}) > 0) or vector(0)",
           "legendFormat": "",
           "instant": true
         }
@@ -550,8 +551,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "text",
+                "color": "green",
                 "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
               }
             ]
           }
@@ -567,7 +572,7 @@
           "fields": ""
         },
         "textMode": "value",
-        "colorMode": "none",
+        "colorMode": "background",
         "graphMode": "none",
         "orientation": "auto",
         "wideLayout": true
@@ -577,7 +582,7 @@
       "id": 9,
       "type": "table",
       "title": "hosts",
-      "description": "One row per host. Sorted by pending upgrades. obsolete = installed packages no longer in any configured repository (leftovers after a release upgrade). cache age = time since the last apt update; collector age = time since apt_info.prom was written (timer: hourly).",
+      "description": "One row per host. Sorted by pending upgrades. obsolete = installed packages no longer in any configured repository (leftovers after a release upgrade). cache age = time since the last apt update; collector age = time since apt_info.prom was written (timer: hourly). stale libs = processes still using a replaced library; restart those services (or the host) to finish the upgrade.",
       "gridPos": {
         "x": 0,
         "y": 4,
@@ -666,6 +671,16 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "expr": "sum by (instance) (time() - node_textfile_mtime_seconds{instance=~\"$instance\",file=~\".*/apt_info.prom\"})",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "I",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (instance) (node_processes_linking_deleted_libraries{instance=~\"$instance\"})",
           "format": "table",
           "instant": true
         }
@@ -975,6 +990,41 @@
                 "value": 120
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stale libs"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
           }
         ]
       },
@@ -1003,9 +1053,10 @@
               "Value #C": 3,
               "Value #D": 4,
               "Value #E": 5,
-              "Value #F": 6,
-              "Value #G": 7,
-              "Value #H": 8
+              "Value #F": 7,
+              "Value #G": 8,
+              "Value #H": 9,
+              "Value #I": 6
             },
             "renameByName": {
               "instance": "host",
@@ -1016,7 +1067,8 @@
               "Value #E": "obsolete",
               "Value #F": "reboot",
               "Value #G": "cache age",
-              "Value #H": "collector age"
+              "Value #H": "collector age",
+              "Value #I": "stale libs"
             }
           }
         },
@@ -1313,7 +1365,7 @@
       "description": "Installed package count per repository origin, summed over the selected hosts. Shows the release mix of the fleet (bookworm vs trixie, Proxmox, Docker, Raspbian) and shrinks the old release's bars as hosts migrate.",
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 40,
         "w": 24,
         "h": 9
       },
@@ -1330,6 +1382,134 @@
           },
           "expr": "sum by (origin) (apt_packages_per_origin{instance=~\"$instance\",origin!=\"\"})",
           "legendFormat": "{{origin}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color",
+        "showUnfilled": true,
+        "sizing": "auto",
+        "minVizHeight": 16,
+        "maxVizHeight": 32,
+        "namePlacement": "left",
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "processes with replaced libraries",
+      "description": "Per host: processes that still map a shared library deleted from disk by an upgrade. Drops to zero after the affected services are restarted. Proxmox hosts count their LXC guests' processes too, so psx3 and pve1 run high until the containers are restarted.",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (instance) (node_processes_linking_deleted_libraries{instance=~\"$instance\"})",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "bargauge",
+      "title": "most-referenced replaced libraries",
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Which replaced libraries are still in use, summed over the selected hosts. libc, libssl/libcrypto, libpcre2 and libsystemd show up after nearly every security round and usually mean 'restart everything' rather than one service.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "topk(12, sum by (library_name) (node_processes_linking_deleted_libraries{instance=~\"$instance\"}))",
+          "legendFormat": "{{library_name}}",
           "instant": true
         }
       ],
