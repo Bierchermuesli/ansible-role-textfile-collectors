@@ -1,0 +1,29 @@
+---
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install ansible ansible-lint
+
+      - name: Create role symlink
+        run: ln -s "$(pwd)" "../textfile-collectors"
+
+      - name: Run ansible-lint
+        run: ansible-lint
+
+      - name: Syntax check
+        run: ansible-playbook tests/test.yml -i tests/inventory --syntax-check

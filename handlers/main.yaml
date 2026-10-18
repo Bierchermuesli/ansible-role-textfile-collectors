@@ -1,0 +1,13 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# Scripts are run by oneshot units, so there is nothing to restart — but a
+# changed script should refresh its .prom instead of waiting for the timer.
+- name: Restart textfile collectors
+  ansible.builtin.systemd:
+    name: "textfile-{{ item }}.service"
+    state: started
+  loop: "{{ _textfile_collectors_effective }}"
+  when: not ansible_check_mode

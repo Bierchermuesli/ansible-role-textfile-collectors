@@ -1,0 +1,21 @@
+{{ ansible_managed | comment }}
+# Runs {{ collector }} and publishes {{ textfile_collectors_dir }}/{{ collector }}.prom
+# for node_exporter's textfile collector.
+
+[Unit]
+Description=Textfile collector: {{ collector }}
+Documentation=https://github.com/prometheus-community/node-exporter-textfile-collector-scripts
+
+[Service]
+Type=oneshot
+# Metrics collection must never compete with the workload: smartctl, apt and
+# zpool are all happy to block on I/O.
+Nice=19
+IOSchedulingClass=idle
+# A hung smartctl would otherwise keep the unit "activating" forever and the
+# timer would never fire again.
+TimeoutStartSec=2min
+{% for k, v in (_textfile_collectors_all[collector].env | default({})).items() %}
+Environment={{ k }}={{ v }}
+{% endfor %}
+ExecStart=/usr/local/bin/textfile-collect {{ textfile_collectors_lib_dir }}/{{ collector }} {{ textfile_collectors_dir }}/{{ collector }}.prom

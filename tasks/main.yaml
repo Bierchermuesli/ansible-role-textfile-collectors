@@ -1,0 +1,196 @@
+---
+- name: Assert requested collectors exist
+  ansible.builtin.assert:
+    that: "item in _textfile_collectors_all"
+    fail_msg: >-
+      Unknown textfile collector '{{ item }}'. Known:
+      {{ _textfile_collectors_all.keys() | sort | join(', ') }}
+  loop: "{{ textfile_collectors }}"
+
+# Preconditions come in two flavours, checked in two passes because the second
+# needs the packages from the first:
+#   requires:         a path that must exist (no disks, no pool, no mail spool)
+#   requires_command: a command that must succeed, for "the tool is too old"
+# Unmet collectors land in the disabled set below and are cleaned up, so a host
+# that gains a pool - or gets a distro upgrade - self-corrects on the next run.
+- name: Check path preconditions
+  ansible.builtin.stat:
+    path: "{{ _textfile_collectors_all[item].requires }}"
+  loop: "{{ textfile_collectors }}"
+  when: _textfile_collectors_all[item].requires is defined
+  register: _textfile_collectors_pathcheck
+  changed_when: false
+  check_mode: false
+
+- name: Select collectors whose paths exist
+  ansible.builtin.set_fact:
+    _textfile_collectors_candidates: "{{ textfile_collectors | difference(_unmet) }}"
+  vars:
+    _unmet: >-
+      {{ _textfile_collectors_pathcheck.results
+         | selectattr('stat', 'defined')
+         | rejectattr('stat.exists')
+         | map(attribute='item') | list }}
+
+# Before the command checks: they probe the very tools installed here.
+- name: Install collector dependencies
+  ansible.builtin.package:
+    name: "{{ _textfile_collectors_candidates | map('extract', _textfile_collectors_all, 'packages') | flatten | unique }}"
+    state: present
+  when: _textfile_collectors_candidates | length > 0
+
+- name: Check command preconditions
+  ansible.builtin.shell: "{{ _textfile_collectors_all[item].requires_command }}"  # noqa: command-instead-of-shell
+  loop: "{{ _textfile_collectors_candidates }}"
+  when: _textfile_collectors_all[item].requires_command is defined
+  register: _textfile_collectors_cmdcheck
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Select collectors whose preconditions are met
+  ansible.builtin.set_fact:
+    _textfile_collectors_effective: "{{ _textfile_collectors_candidates | difference(_unmet) }}"
+  vars:
+    _unmet: >-
+      {{ _textfile_collectors_cmdcheck.results
+         | selectattr('rc', 'defined')
+         | selectattr('rc', '!=', 0)
+         | map(attribute='item') | list }}
+
+- name: Report skipped collectors
+  ansible.builtin.debug:
+    msg: >-
+      Skipped (precondition not met):
+      {{ textfile_collectors | difference(_textfile_collectors_effective) | join(', ') }}
+  when: textfile_collectors | difference(_textfile_collectors_effective) | length > 0
+
+- name: Install the atomic-write wrapper
+  ansible.builtin.copy:
+    src: textfile-collect
+    dest: /usr/local/bin/textfile-collect
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the script directory
+  ansible.builtin.file:
+    path: "{{ textfile_collectors_lib_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install collector scripts
+  ansible.builtin.copy:
+    src: "{{ _textfile_collectors_all[item].script }}"
+    dest: "{{ textfile_collectors_lib_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ _textfile_collectors_effective }}"
+  notify: Restart textfile collectors
+
+- name: Install collector units
+  ansible.builtin.template:
+    src: "textfile-collector.{{ item.1 }}.j2"
+    dest: "/etc/systemd/system/textfile-{{ item.0 }}.{{ item.1 }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ _textfile_collectors_effective | product(['service', 'timer']) | list }}"
+  loop_control:
+    label: "textfile-{{ item.0 }}.{{ item.1 }}"
+  vars:
+    collector: "{{ item.0 }}"
+  notify: Reload systemd
+
+- name: Enable collector timers
+  ansible.builtin.systemd:
+    name: "textfile-{{ item }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ _textfile_collectors_effective }}"
+  # The unit files only exist for real outside check mode.
+  when: not ansible_check_mode
+
+# Without this the first .prom only appears after the timer's first tick —
+# up to 12h for node_os_info. Also surfaces a broken script during the play
+# instead of silently at 03:00.
+- name: Run each collector once
+  ansible.builtin.systemd:
+    name: "textfile-{{ item }}.service"
+    state: started
+  loop: "{{ _textfile_collectors_effective }}"
+  changed_when: false
+  when: not ansible_check_mode
+
+# ── Legacy ────────────────────────────────────────────────────────────────
+# Hosts that had a hand-rolled zram-metrics.sh in root's crontab writing
+# zram.prom with a plain `>` redirect. The timer supersedes it; leaving both
+# would have two writers racing on the same file.
+- name: Look for the hand-rolled zram cron
+  ansible.builtin.command: crontab -l -u root
+  register: _textfile_root_crontab
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: "'zram' in _textfile_collectors_effective"
+
+- name: Drop the hand-rolled zram cron
+  ansible.builtin.shell: |
+    set -o pipefail
+    crontab -l -u root | grep -v 'zram-metrics\.sh' | crontab -u root -
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when:
+    - "'zram' in _textfile_collectors_effective"
+    - "'zram-metrics.sh' in (_textfile_root_crontab.stdout | default(''))"
+
+- name: Remove the hand-rolled zram script
+  ansible.builtin.file:
+    path: /usr/local/bin/zram-metrics.sh
+    state: absent
+  when: "'zram' in _textfile_collectors_effective"
+
+# ── Removal of collectors that are no longer enabled ──────────────────────
+# A leftover .prom keeps exporting its last values forever — node_exporter has
+# no idea the writer is gone — so the stale file has to go with the units.
+#
+# What to clean up comes from the host, not from the registry: a collector
+# that was dropped from the registry entirely (or renamed) would otherwise
+# orphan its units and .prom on every host that once had it.
+- name: Find installed collector units
+  ansible.builtin.find:
+    paths: /etc/systemd/system
+    patterns: "textfile-*.timer"
+  register: _textfile_collectors_installed
+  check_mode: false
+
+- name: Select collectors to remove
+  ansible.builtin.set_fact:
+    _textfile_collectors_disabled: >-
+      {{ _textfile_collectors_installed.files
+         | map(attribute='path') | map('basename')
+         | map('regex_replace', '^textfile-(.*)\.timer$', '\1') | list
+         | difference(_textfile_collectors_effective) }}
+
+- name: Stop timers of disabled collectors
+  ansible.builtin.systemd:
+    name: "textfile-{{ item }}.timer"
+    enabled: false
+    state: stopped
+  loop: "{{ _textfile_collectors_disabled }}"
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Remove disabled collectors
+  ansible.builtin.file:
+    path: "{{ item.1.format(item.0) }}"
+    state: absent
+  loop: "{{ _textfile_collectors_disabled | product(_textfile_collectors_stale_paths) | list }}"
+  loop_control:
+    label: "{{ item.1.format(item.0) }}"
+  notify: Reload systemd

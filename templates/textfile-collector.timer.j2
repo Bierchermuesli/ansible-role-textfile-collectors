@@ -1,0 +1,13 @@
+{{ ansible_managed | comment }}
+
+[Unit]
+Description=Run textfile collector {{ collector }} every {{ _textfile_collectors_all[collector].interval }}
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec={{ _textfile_collectors_all[collector].interval }}
+RandomizedDelaySec={{ textfile_collectors_randomized_delay }}
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

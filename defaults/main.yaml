@@ -1,0 +1,96 @@
+---
+# Where the .prom files land. Follows the node_exporter role's own variable so
+# a host that moves the directory (see the `router` group) moves both halves.
+textfile_collectors_dir: "{{ node_exporter_textfile_dir | default('/var/lib/node_exporter') }}"
+
+# Installed scripts live here — /usr/local/lib because they are not managed by
+# dpkg. Each is installed under its collector name, without extension, so the
+# unit files are uniform.
+textfile_collectors_lib_dir: /usr/local/lib/textfile-collectors
+
+# Which collectors run on this host. Fleet policy lives in group_vars/all.yaml
+# (base + node_exporter_profile extras); a host can append situational ones,
+# e.g. textfile_collectors: "{{ textfile_collectors_base + ['postfix_queue'] }}"
+textfile_collectors:
+  - apt_info
+  - deleted_libraries
+  - postfix_queue
+
+# Timers fire on a shared schedule, so spread the wakeups — otherwise every
+# host in the fleet shells out to apt/smartctl at the same second.
+textfile_collectors_randomized_delay: 5min
+
+# name -> script (path under files/), apt packages it needs, timer interval,
+# optionally `requires`: a path that must exist on the host, and `env`: a
+# map rendered as Environment= in the unit, for scripts with knobs. Collectors
+# whose precondition is not met are skipped and cleaned up, so the profile
+# lists below express intent while `requires` checks reality — no inventory
+# bookkeeping for "which host has an NVMe / a pool / a mail spool".
+# The upstream/ scripts are vendored from
+# prometheus-community/node-exporter-textfile-collector-scripts at the commit
+# recorded in files/upstream/UPSTREAM.md (Apache-2.0).
+textfile_collectors_registry:
+  apt_info:
+    script: upstream/apt_info.py
+    packages: [python3-apt, python3-prometheus-client]
+    interval: 1h
+  deleted_libraries:
+    script: upstream/deleted_libraries.py
+    packages: [python3-prometheus-client]
+    interval: 1h
+  smartmon:
+    script: upstream/smartmon.sh
+    packages: [smartmontools]
+    interval: 1h
+  nvme_metrics:
+    script: upstream/nvme_metrics.py
+    packages: [nvme-cli, python3-prometheus-client]
+    interval: 1h
+    requires: /sys/class/nvme
+    # Upstream calls `nvme smart-log --verbose`, which bookworm's nvme-cli 2.3
+    # does not know — the collector fails on every tick. Drops in by itself
+    # once a host reaches trixie.
+    requires_command: "nvme smart-log --help 2>&1 | grep -q -- --verbose"
+  zfs_zpool:
+    # zfsutils-linux is a precondition, not a dependency to install — pulling
+    # ZFS onto a host that has no pools is not this role's job. Without the
+    # guard the script would exit 127 on `zpool` and leave a failed unit.
+    script: upstream/zfs_zpool.sh
+    packages: []
+    interval: 15min
+    requires: /sys/module/zfs
+  chrony:
+    script: upstream/chrony.py
+    packages: [python3-prometheus-client]
+    interval: 5min
+  postfix_queue:
+    script: postfix_queue.sh
+    packages: []
+    interval: 5min
+    requires: /var/spool/postfix
+  # dma (DragonFly Mail Agent) is the relay on the r3search pot nodes instead
+  # of postfix. Dormant until a host actually has the spool — see README.
+  dma_queue:
+    script: dma_queue.sh
+    packages: []
+    interval: 5min
+    requires: /var/spool/dma
+  zram:
+    script: zram.sh
+    packages: []
+    interval: 10min
+    requires: /sys/block/zram0
+  # mDNS reflector: what avahi sees per segment plus the 5353 firewall
+  # counters. Only where roles/avahi installed the daemon.
+  avahi:
+    script: avahi.sh
+    packages: []
+    interval: 5min
+    requires: /usr/bin/avahi-browse
+    # AVAHI_PER_HOST=1 adds avahi_host_services{host,address,...}. One series
+    # per device and protocol - fine for a home network, not for a campus.
+    env: {}
+
+# Merged over the registry above: lets a host add its own script without
+# patching the role.
+textfile_collectors_custom: {}

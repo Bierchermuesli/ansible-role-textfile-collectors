@@ -1,0 +1,30 @@
+#!/bin/sh
+# Managed by Ansible (roles/textfile-collectors). Do not edit on the host.
+#
+#   textfile-collect <script> <output.prom>
+#
+# Writes atomically via mktemp+mv in the target directory, for two reasons:
+# node_exporter scrapes on its own schedule and must never read a half-written
+# file, and a failing script must leave the previous .prom untouched so its
+# node_textfile_mtime_seconds goes stale (visible) instead of the metric
+# disappearing (silent).
+#
+# Upstream suggests `sponge` for this; mktemp+mv avoids the moreutils
+# dependency and cannot fall back to a cross-filesystem copy.
+set -eu
+
+script=$1
+out=$2
+dir=$(dirname "$out")
+
+if [ ! -d "$dir" ]; then
+    echo "textfile-collect: $dir does not exist - is node_exporter installed?" >&2
+    exit 1
+fi
+
+tmp=$(mktemp -p "$dir" ".$(basename "$out").XXXXXX")
+trap 'rm -f "$tmp"' EXIT INT TERM
+
+"$script" >"$tmp"
+chmod 0644 "$tmp"
+mv "$tmp" "$out"

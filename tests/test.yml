@@ -1,0 +1,10 @@
+---
+- name: Test textfile-collectors role
+  hosts: localhost
+  become: true
+  roles:
+    - role: textfile-collectors
+      vars:
+        textfile_collectors:
+          - apt_info
+          - deleted_libraries
