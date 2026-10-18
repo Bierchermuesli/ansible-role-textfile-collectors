@@ -104,13 +104,15 @@ Import and pick your Prometheus-compatible datasource in the
 - `contrib/dashboards/avahi.json`: health of the mDNS reflector collector,
   services and hosts per interface, UDP/5353 traffic, and a per-host table
   (needs `AVAHI_PER_HOST=1`).
+- `contrib/dashboards/disks.json`: SMART health, bad-sector and CRC counters,
+  temperatures and NVMe wear per disk, from `smartmon` and `nvme_metrics`.
 - `contrib/dashboards/zram.json`: fill, compression ratio, RAM footprint and
   swap context per host and device.
 - `contrib/dashboards/zfs.json`: ARC and pool state from node_exporter's zfs
   collector, plus pool capacity, fragmentation and dataset sizes from
   `zfs_zpool`.
 
-`apt.json` and `avahi.json` are classic dashboard JSON (import via the UI or
+`apt.json`, `avahi.json` and `disks.json` are classic dashboard JSON (import via the UI or
 API). `zram.json` and `zfs.json` are `dashboard.grafana.app/v2` resource
 manifests for Grafana 12+; import them with `gcx dashboards create -f`.
 
