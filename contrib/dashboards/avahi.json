@@ -37,11 +37,7 @@
         "type": "datasource",
         "label": "Metrics datasource",
         "query": "prometheus",
-        "current": {
-          "selected": false,
-          "text": "vic.broccoli.rocks-PROM",
-          "value": "cfku52btn6cjkf"
-        },
+        "current": {},
         "hide": 0,
         "regex": "",
         "skipUrlSync": false

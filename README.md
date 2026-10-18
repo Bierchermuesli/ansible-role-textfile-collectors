@@ -95,10 +95,15 @@ textfile_collectors_custom:
 
 ## Dashboards
 
-`contrib/dashboards/avahi.json`: health of the mDNS reflector collector,
-services and hosts per interface, UDP/5353 traffic, and a per-host table
-(needs `AVAHI_PER_HOST=1`). Import it and pick your Prometheus-compatible
-datasource in the `DS_PROMETHEUS` variable.
+Import and pick your Prometheus-compatible datasource in the
+`DS_PROMETHEUS` variable.
+
+- `contrib/dashboards/apt.json`: fleet view of `apt_info`. Pending and
+  security upgrades, reboots, held packages and apt cache age per host, their
+  history, and the installed-package mix per repository origin.
+- `contrib/dashboards/avahi.json`: health of the mDNS reflector collector,
+  services and hosts per interface, UDP/5353 traffic, and a per-host table
+  (needs `AVAHI_PER_HOST=1`).
 
 ## Notes
 
