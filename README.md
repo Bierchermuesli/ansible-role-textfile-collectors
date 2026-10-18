@@ -116,6 +116,28 @@ Import and pick your Prometheus-compatible datasource in the
 API). `zram.json` and `zfs.json` are `dashboard.grafana.app/v2` resource
 manifests for Grafana 12+; import them with `gcx dashboards create -f`.
 
+## Alerts
+
+`defaults/main/alerts.yml` ships vmalert/Prometheus rule groups for every
+collector: apt (security upgrades pending for a week, reboot required,
+stale cache, services still using replaced libraries), SMART and NVMe
+health, zpool capacity, zram, postfix queues, avahi. Merge the list into
+your own:
+
+```yaml
+# playbook that configures vmalert
+vars_files:
+  - roles/textfile-collectors/defaults/main/alerts.yml
+```
+
+```yaml
+# host_vars of the vmalert host
+textfile_collectors_alert_selector: 'job!="node_clients"'   # optional extra matchers
+vmalert_rules: "{{ my_rule_groups + textfile_collectors_alert_rules }}"
+```
+
+Thresholds are overridable variables (`textfile_collectors_alert_*`), listed at the top of the file. They are read with `default()` on purpose: play-level `vars_files` would otherwise outrank your host_vars.
+
 ## Notes
 
 - Output is written by `/usr/local/bin/textfile-collect` via mktemp+mv. A

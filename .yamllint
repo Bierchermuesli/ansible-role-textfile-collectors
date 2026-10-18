@@ -1,0 +1,9 @@
+extends: default
+rules:
+  # PromQL with an injected selector does not fold nicely
+  line-length:
+    max: 200
+  comments:
+    min-spaces-from-content: 1
+  truthy:
+    allowed-values: ["true", "false"]

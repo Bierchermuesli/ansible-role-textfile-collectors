@@ -1,0 +1,310 @@
+---
+# vmalert / Prometheus alert rules for the collectors in this role, ready to
+# merge into your rule list (see README, "Alerts"). Kept in their own file so
+# a vmalert play can load just this one via vars_files without dragging the
+# collector defaults along.
+#
+# Annotations use Prometheus templating, hence the {% raw %} guards; the
+# selector below is Ansible templating and is resolved when the list is used.
+
+# Tunables are read with `| default(...)` instead of being defined here: a
+# vmalert play loads this file via vars_files, and play vars outrank
+# host_vars, so a definition here could not be overridden per host.
+#
+#   textfile_collectors_alert_selector            extra label matchers added to every
+#                                                 expression, e.g. 'job!="node_clients"'
+#   textfile_collectors_alert_hdd_temp_celsius    50
+#   textfile_collectors_alert_nvme_temp_celsius   70
+#   textfile_collectors_alert_nvme_wear_ratio     0.8
+#   textfile_collectors_alert_zpool_warn_percent  80
+#   textfile_collectors_alert_zpool_crit_percent  90
+#   textfile_collectors_alert_postfix_deferred_backlog  50
+
+textfile_collectors_alert_rules:
+  # ── apt_info / deleted_libraries ─────────────────────────────────────────
+  - name: textfile-apt
+    # Package state moves at the apt timer's pace (hourly), not the scrape's.
+    interval: 15m
+    rules:
+      # A host with nothing security-related pending has NO series here (the
+      # zero sample carries an empty origin and is filtered out), so a plain
+      # min_over_time would only ever see the hours where something was
+      # pending and fire on hosts that are long clean. Hence: pending now, and
+      # a sample present in (nearly) every hour of the last seven days.
+      - alert: SecurityUpgradesPending
+        expr: |
+          sum by (instance) (
+            apt_upgrades_pending{origin=~"(?i).*security.*", {{ textfile_collectors_alert_selector | default('') }} }
+          ) > 0
+          and
+          count_over_time(
+            sum by (instance) (
+              apt_upgrades_pending{origin=~"(?i).*security.*", {{ textfile_collectors_alert_selector | default('') }} }
+            )[7d:1h]
+          ) >= 160
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}Security updates pending on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}{{ $value }} security update(s) pending for 7 days — unattended-upgrades is not applying them.{% endraw %}'
+
+      - alert: RebootRequired
+        expr: |
+          min_over_time(node_reboot_required{ {{ textfile_collectors_alert_selector | default('') }} }[3d]) == 1
+          and
+          node_reboot_required{ {{ textfile_collectors_alert_selector | default('') }} } offset 3d == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}{{ $labels.instance }} needs a reboot{% endraw %}'
+          description: '{% raw %}/run/reboot-required has been present for 3 days — a kernel or libc upgrade is waiting.{% endraw %}'
+
+      # Without a fresh cache every other apt metric on the host is stale in a
+      # way that looks like good news: zero pending upgrades.
+      - alert: AptCacheStale
+        expr: time() - apt_package_cache_timestamp_seconds{ {{ textfile_collectors_alert_selector | default('') }} } > 172800
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}apt cache stale on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}Package lists are {{ $value | humanizeDuration }} old — APT::Periodic::Update-Package-Lists or apt-daily.timer is broken.{% endraw %}'
+
+      # Processes still mapping a library that an upgrade replaced on disk: the
+      # fix landed, the running service still has the hole. Same series-gap
+      # caveat as above (no processes = no series), so: non-zero now and seen
+      # in nearly every hour of the last three days. On Proxmox hosts this
+      # includes the LXC guests' processes.
+      - alert: ServicesNeedRestart
+        expr: |
+          sum by (instance) (
+            node_processes_linking_deleted_libraries{ {{ textfile_collectors_alert_selector | default('') }} }
+          ) > 0
+          and
+          count_over_time(
+            sum by (instance) (
+              node_processes_linking_deleted_libraries{ {{ textfile_collectors_alert_selector | default('') }} }
+            )[3d:1h]
+          ) >= 66
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}Services on {{ $labels.instance }} still use replaced libraries{% endraw %}'
+          description: '{% raw %}{{ $value }} processes have mapped a deleted shared library for 3 days — restart them (needrestart, or the containers) to finish the upgrade.{% endraw %}'
+
+  # ── smartmon / nvme_metrics ──────────────────────────────────────────────
+  - name: textfile-disks
+    interval: 5m
+    rules:
+      - alert: SmartUnhealthy
+        expr: smartmon_device_smart_healthy{ {{ textfile_collectors_alert_selector | default('') }} } == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{% raw %}SMART health FAILED: {{ $labels.disk }} on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}smartctl overall self-assessment is FAILED for {{ $labels.disk }} ({{ $labels.type }}). Replace the disk.{% endraw %}'
+
+      # Sectors the drive cannot read right now (197) or gave up on (198).
+      - alert: SmartSectorsPending
+        expr: |
+          smartmon_current_pending_sector_raw_value{ {{ textfile_collectors_alert_selector | default('') }} } > 0
+          or smartmon_offline_uncorrectable_raw_value{ {{ textfile_collectors_alert_selector | default('') }} } > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{% raw %}Unreadable sectors on {{ $labels.disk }} ({{ $labels.instance }}){% endraw %}'
+          description: '{% raw %}SMART attribute {{ $labels.smart_id }} = {{ $value }} on {{ $labels.disk }}. Scrub/check the filesystem and plan a replacement.{% endraw %}'
+
+      # Reallocated sectors (5) are normal wear when static; a disk that keeps
+      # adding them is on its way out.
+      - alert: SmartReallocatedGrowing
+        expr: delta(smartmon_reallocated_sector_ct_raw_value{ {{ textfile_collectors_alert_selector | default('') }} }[24h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}{{ $labels.disk }} on {{ $labels.instance }} reallocated {{ $value }} sectors in 24h{% endraw %}'
+          description: '{% raw %}Reallocated sector count is rising. Back up, then watch or replace.{% endraw %}'
+
+      # UDMA CRC errors (199) are the cable or backplane, not the platter.
+      - alert: SmartCrcErrors
+        expr: delta(smartmon_udma_crc_error_count_raw_value{ {{ textfile_collectors_alert_selector | default('') }} }[24h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}CRC errors on {{ $labels.disk }} ({{ $labels.instance }}){% endraw %}'
+          description: '{% raw %}{{ $value }} new UDMA CRC errors in 24h — reseat or replace the SATA cable.{% endraw %}'
+
+      - alert: SmartTempHigh
+        expr: smartmon_temperature_celsius_raw_value{ {{ textfile_collectors_alert_selector | default('') }} } > {{ textfile_collectors_alert_hdd_temp_celsius | default(50) }}
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}{{ $labels.disk }} on {{ $labels.instance }} at {{ $value }}°C{% endraw %}'
+          description: '{% raw %}SMART 194 above the warning threshold for 15 minutes — check airflow.{% endraw %}'
+
+      # nvme smart-log critical_warning is a bitmask: spare below threshold,
+      # temperature, media degraded, read-only, volatile backup failed.
+      - alert: NvmeCriticalWarning
+        expr: nvme_critical_warning{ {{ textfile_collectors_alert_selector | default('') }} } != 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{% raw %}NVMe {{ $labels.device }} on {{ $labels.instance }} raised critical_warning{% endraw %}'
+          description: '{% raw %}critical_warning bitmask = {{ $value }}. `nvme smart-log /dev/{{ $labels.device }}` says which.{% endraw %}'
+
+      - alert: NvmeWearHigh
+        expr: nvme_percentage_used_ratio{ {{ textfile_collectors_alert_selector | default('') }} } > {{ textfile_collectors_alert_nvme_wear_ratio | default(0.8) }}
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}NVMe {{ $labels.device }} on {{ $labels.instance }} at {{ $value | humanizePercentage }} of rated life{% endraw %}'
+          description: '{% raw %}Vendor wear estimate past the warning threshold. Plan a replacement.{% endraw %}'
+
+      - alert: NvmeSpareLow
+        expr: |
+          nvme_available_spare_ratio{ {{ textfile_collectors_alert_selector | default('') }} }
+          <= nvme_available_spare_threshold_ratio{ {{ textfile_collectors_alert_selector | default('') }} } + 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{% raw %}NVMe {{ $labels.device }} on {{ $labels.instance }} is out of spare blocks{% endraw %}'
+          description: '{% raw %}available_spare is at or near the device threshold. The drive will go read-only soon.{% endraw %}'
+
+      - alert: NvmeMediaErrors
+        expr: delta(nvme_media_errors_total{ {{ textfile_collectors_alert_selector | default('') }} }[24h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: '{% raw %}NVMe {{ $labels.device }} on {{ $labels.instance }} logged media errors{% endraw %}'
+          description: '{% raw %}{{ $value }} new media/data integrity errors in 24h.{% endraw %}'
+
+      - alert: NvmeTempHigh
+        expr: nvme_temperature_celsius{ {{ textfile_collectors_alert_selector | default('') }} } > {{ textfile_collectors_alert_nvme_temp_celsius | default(70) }}
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}NVMe {{ $labels.device }} on {{ $labels.instance }} at {{ $value }}°C{% endraw %}'
+          description: '{% raw %}Composite temperature above the warning threshold for 15 minutes.{% endraw %}'
+
+  # ── zfs_zpool ────────────────────────────────────────────────────────────
+  # Pool state (degraded/suspended) is node_exporter's zfs collector, not this
+  # role. Capacity is: ZFS slows down and fragments past 80 percent.
+  - name: textfile-zfs
+    interval: 5m
+    rules:
+      - alert: ZpoolCapacity
+        expr: |
+          round((1 - zfs_zpool_free_bytes{ {{ textfile_collectors_alert_selector | default('') }} } / zfs_zpool_size_bytes{ {{ textfile_collectors_alert_selector | default('') }} }) * 100)
+          > {{ textfile_collectors_alert_zpool_warn_percent | default(80) }} <= {{ textfile_collectors_alert_zpool_crit_percent | default(90) }}
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}Pool {{ $labels.zpool_name }} on {{ $labels.instance }} is {{ $value }}% full{% endraw %}'
+          description: '{% raw %}zpool allocation past the warning threshold; performance degrades from here.{% endraw %}'
+
+      - alert: ZpoolCapacity
+        expr: |
+          round((1 - zfs_zpool_free_bytes{ {{ textfile_collectors_alert_selector | default('') }} } / zfs_zpool_size_bytes{ {{ textfile_collectors_alert_selector | default('') }} }) * 100)
+          > {{ textfile_collectors_alert_zpool_crit_percent | default(90) }}
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{% raw %}Pool {{ $labels.zpool_name }} on {{ $labels.instance }} is {{ $value }}% full{% endraw %}'
+          description: '{% raw %}zpool nearly full. Free space or add a vdev before writes stall.{% endraw %}'
+
+  # ── zram ─────────────────────────────────────────────────────────────────
+  # Swap fill itself belongs to a generic SwapUsage rule; these catch the
+  # zram-specific failure modes.
+  - name: textfile-zram
+    interval: 5m
+    rules:
+      # zram consuming a large share of physical RAM — leading indicator of
+      # memory pressure.
+      - alert: ZramHighFootprint
+        expr: |
+          zram_used_bytes{ {{ textfile_collectors_alert_selector | default('') }} }
+          / on(instance) group_left node_memory_MemTotal_bytes{ {{ textfile_collectors_alert_selector | default('') }} }
+          > 0.20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}zram {{ $labels.device }} large footprint on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}zram {{ $labels.device }} is consuming {{ $value | humanizePercentage }} of physical RAM.{% endraw %}'
+
+      - alert: ZramAlmostFull
+        expr: zram_data_bytes{ {{ textfile_collectors_alert_selector | default('') }} } / zram_disksize_bytes{ {{ textfile_collectors_alert_selector | default('') }} } * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}zram {{ $labels.device }} {{ $value | humanize }}% full on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}zram {{ $labels.device }} stored data is {{ $value | humanize }}% of configured disksize.{% endraw %}'
+
+      # Ratio below 2x while holding non-trivial data: the workload does not
+      # compress, zram burns CPU for nothing. Idle devices (< 64 MiB) skipped.
+      - alert: ZramPoorCompression
+        expr: |
+          zram_data_bytes{ {{ textfile_collectors_alert_selector | default('') }} } / zram_compressed_bytes{ {{ textfile_collectors_alert_selector | default('') }} } < 2
+          and zram_data_bytes{ {{ textfile_collectors_alert_selector | default('') }} } > 67108864
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}zram {{ $labels.device }} poor compression on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}zram compression ratio is {{ $value }}× (<2×). Consider disabling zram or changing the algorithm.{% endraw %}'
+
+  # ── postfix_queue ────────────────────────────────────────────────────────
+  # deferred ages legitimately (retries run for days); the queues that must
+  # flow are active, incoming and maildrop.
+  - name: textfile-mail
+    interval: 5m
+    rules:
+      - alert: PostfixQueueStalled
+        expr: postfix_queue_oldest_message_age_seconds{queue=~"active|incoming|maildrop", {{ textfile_collectors_alert_selector | default('') }} } > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}postfix {{ $labels.queue }} queue stalled on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}Oldest message in {{ $labels.queue }} is {{ $value | humanizeDuration }} old — postfix is not processing. `mailq`, `journalctl -u postfix`.{% endraw %}'
+
+      - alert: PostfixDeferredBacklog
+        expr: postfix_queue_messages{queue="deferred", {{ textfile_collectors_alert_selector | default('') }} } > {{ textfile_collectors_alert_postfix_deferred_backlog | default(50) }}
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}{{ $value }} deferred mails on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}Deferred queue backlog — a relay or recipient is rejecting. `postqueue -p`.{% endraw %}'
+
+  # ── avahi ────────────────────────────────────────────────────────────────
+  - name: textfile-avahi
+    interval: 5m
+    rules:
+      - alert: AvahiDown
+        expr: avahi_up{ {{ textfile_collectors_alert_selector | default('') }} } == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}avahi-daemon down on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}The mDNS reflector is not running; cross-segment discovery is broken.{% endraw %}'
+
+      - alert: AvahiBrowseFailing
+        expr: avahi_browse_success{ {{ textfile_collectors_alert_selector | default('') }} } == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{% raw %}avahi-browse failing on {{ $labels.instance }}{% endraw %}'
+          description: '{% raw %}The collector cannot enumerate services (D-Bus or timeout). The daemon may still reflect; the metrics are blind.{% endraw %}'
