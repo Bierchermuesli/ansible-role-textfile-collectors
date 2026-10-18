@@ -1,3 +1,4 @@
+---
 extends: default
 rules:
   # PromQL with an injected selector does not fold nicely
@@ -5,5 +6,9 @@ rules:
     max: 200
   comments:
     min-spaces-from-content: 1
-  truthy:
-    allowed-values: ["true", "false"]
+  comments-indentation: false
+  braces:
+    max-spaces-inside: 1
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
