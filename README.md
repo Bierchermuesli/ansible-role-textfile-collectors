@@ -93,6 +93,13 @@ textfile_collectors_custom:
 | `dma_queue` | same for hosts relaying via dma | dma spool |
 | `avahi` | services/hosts an mDNS reflector sees per interface, UDP/5353 firewall counters | [ansible-role-avahi], iptables rules commented `mDNS reflector` |
 
+## Dashboards
+
+`contrib/dashboards/avahi.json`: health of the mDNS reflector collector,
+services and hosts per interface, UDP/5353 traffic, and a per-host table
+(needs `AVAHI_PER_HOST=1`). Import it and pick your Prometheus-compatible
+datasource in the `DS_PROMETHEUS` variable.
+
 ## Notes
 
 - Output is written by `/usr/local/bin/textfile-collect` via mktemp+mv. A
