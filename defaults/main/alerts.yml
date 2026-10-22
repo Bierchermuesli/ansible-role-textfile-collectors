@@ -23,7 +23,7 @@
 textfile_collectors_alert_rules:
   # ── apt_info / deleted_libraries ─────────────────────────────────────────
   - name: textfile-apt
-    # Package state moves at the apt timer's pace (hourly), not the scrape's.
+    # Package state moves at apt's pace (apt hook), not the scrape's.
     interval: 15m
     rules:
       # A host with nothing security-related pending has NO series here (the

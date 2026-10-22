@@ -1,0 +1,4 @@
+{{ ansible_managed | comment('c') }}
+// Refresh {{ collector }}.prom whenever apt changes what it knows.
+APT::Update::Post-Invoke-Success { "systemctl start --no-block textfile-{{ collector }}.service 2>/dev/null || true"; };
+DPkg::Post-Invoke { "systemctl start --no-block textfile-{{ collector }}.service 2>/dev/null || true"; };

@@ -20,8 +20,9 @@ textfile_collectors:
 # host in the fleet shells out to apt/smartctl at the same second.
 textfile_collectors_randomized_delay: 5min
 
-# name -> script (path under files/), apt packages it needs, timer interval,
-# optionally `requires`: a path that must exist on the host, and `env`: a
+# name -> script (path under files/), apt packages it needs, timer interval
+# (omit it for run-at-boot only), optionally `apt_hook: true` to also run after
+# every `apt update` and dpkg run, `requires`: a path that must exist on the host, and `env`: a
 # map rendered as Environment= in the unit, for scripts with knobs. Collectors
 # whose precondition is not met are skipped and cleaned up, so the profile
 # lists below express intent while `requires` checks reality — no inventory
@@ -31,9 +32,14 @@ textfile_collectors_randomized_delay: 5min
 # recorded in files/upstream/UPSTREAM.md (Apache-2.0).
 textfile_collectors_registry:
   apt_info:
+    # Package state only changes when apt runs, so the apt hook is the
+    # trigger and there is no periodic timer. Side effect: a dead apt timer
+    # or a broken hook freezes apt_package_cache_timestamp_seconds, which is
+    # exactly what AptCacheStale watches - one alert for the whole chain.
+    # The boot run resets node_reboot_required after a reboot.
     script: upstream/apt_info.py
     packages: [python3-apt, python3-prometheus-client]
-    interval: 1h
+    apt_hook: true
   deleted_libraries:
     script: upstream/deleted_libraries.py
     packages: [python3-prometheus-client]

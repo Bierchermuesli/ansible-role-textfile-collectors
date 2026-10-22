@@ -4,6 +4,10 @@
 # recursive: a host may override a single key of a registry entry, e.g. just
 # `env` or `interval`, without repeating script/packages.
 _textfile_collectors_all: "{{ textfile_collectors_registry | combine(textfile_collectors_custom, recursive=True) }}"
+_textfile_collectors_hooked: >-
+  {{ _textfile_collectors_all | dict2items
+     | selectattr('value.apt_hook', 'defined') | selectattr('value.apt_hook')
+     | map(attribute='key') | list }}
 # Everything a removed collector leaves behind. The .prom matters most: a
 # leftover file keeps exporting its last values forever, because node_exporter
 # has no idea the writer is gone.
@@ -12,3 +16,4 @@ _textfile_collectors_stale_paths:
   - /etc/systemd/system/textfile-{}.timer
   - "{{ textfile_collectors_lib_dir }}/{}"
   - "{{ textfile_collectors_dir }}/{}.prom"
+  - /etc/apt/apt.conf.d/99textfile-{}

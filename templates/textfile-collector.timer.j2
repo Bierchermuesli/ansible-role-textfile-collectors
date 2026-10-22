@@ -1,11 +1,17 @@
 {{ ansible_managed | comment }}
 
 [Unit]
+{% if _textfile_collectors_all[collector].interval is defined %}
 Description=Run textfile collector {{ collector }} every {{ _textfile_collectors_all[collector].interval }}
+{% else %}
+Description=Run textfile collector {{ collector }} at boot
+{% endif %}
 
 [Timer]
 OnBootSec=2min
+{% if _textfile_collectors_all[collector].interval is defined %}
 OnUnitActiveSec={{ _textfile_collectors_all[collector].interval }}
+{% endif %}
 RandomizedDelaySec={{ textfile_collectors_randomized_delay }}
 AccuracySec=30s
 

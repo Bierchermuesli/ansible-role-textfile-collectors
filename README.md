@@ -52,7 +52,8 @@ textfile_collectors_custom:
   my_thing:
     script: my_thing.sh      # path under the role's files/
     packages: [jq]
-    interval: 10min
+    interval: 10min          # omit for run-at-boot only
+    apt_hook: true           # optional, also run after apt update / dpkg
     requires: /run/my_thing.sock   # optional
     requires_command: "my_thing --version | grep -q 2."   # optional
     env: {MY_THING_VERBOSE: "1"}   # optional, Environment= in the unit
@@ -147,7 +148,11 @@ Thresholds are overridable variables (`textfile_collectors_alert_*`), listed at 
 - Disabling a collector removes its units, script and `.prom`. A leftover
   file would keep exporting its last values forever.
 - `apt_info` reports what the apt cache knows, it does not run `apt update`.
-  Pair it with `APT::Periodic::Update-Package-Lists "1"`.
+  Pair it with `APT::Periodic::Update-Package-Lists`. It has no periodic
+  timer: an apt hook (`/etc/apt/apt.conf.d/99textfile-apt_info`) runs it after
+  every `apt update` and dpkg run, manual ones included, plus once at boot. If
+  apt stops running, `apt_package_cache_timestamp_seconds` freezes and
+  `AptCacheStale` fires.
 - Upstream scripts are Apache-2.0, see `files/upstream/UPSTREAM.md` for the
   pinned commit and local patches.
 

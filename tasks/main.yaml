@@ -115,6 +115,25 @@
   # The unit files only exist for real outside check mode.
   when: not ansible_check_mode
 
+# --no-block: apt still holds its lock while the hook runs, the collector
+# only reads the cache and must not delay apt.
+- name: Install apt hooks
+  ansible.builtin.template:
+    src: apt-hook.conf.j2
+    dest: "/etc/apt/apt.conf.d/99textfile-{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ _textfile_collectors_effective | select('in', _textfile_collectors_hooked) | list }}"
+  vars:
+    collector: "{{ item }}"
+
+- name: Remove apt hooks of collectors without apt_hook
+  ansible.builtin.file:
+    path: "/etc/apt/apt.conf.d/99textfile-{{ item }}"
+    state: absent
+  loop: "{{ _textfile_collectors_effective | reject('in', _textfile_collectors_hooked) | list }}"
+
 # Without this the first .prom only appears after the timer's first tick —
 # up to 12h for node_os_info. Also surfaces a broken script during the play
 # instead of silently at 03:00.
