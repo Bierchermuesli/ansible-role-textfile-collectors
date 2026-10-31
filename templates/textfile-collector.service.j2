@@ -14,7 +14,7 @@ Nice=19
 IOSchedulingClass=idle
 # A hung smartctl would otherwise keep the unit "activating" forever and the
 # timer would never fire again.
-TimeoutStartSec=2min
+TimeoutStartSec={{ _textfile_collectors_all[collector].timeout | default(textfile_collectors_timeout) }}
 {% for k, v in (_textfile_collectors_all[collector].env | default({})).items() %}
 Environment={{ k }}={{ v }}
 {% endfor %}

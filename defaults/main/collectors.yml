@@ -20,6 +20,10 @@ textfile_collectors:
 # host in the fleet shells out to apt/smartctl at the same second.
 textfile_collectors_randomized_delay: 5min
 
+# TimeoutStartSec for every collector unit; a registry entry can set its own
+# `timeout`. apt_info alone needs ~2 min of CPU on an ARMv6 Pi 1.
+textfile_collectors_timeout: 2min
+
 # name -> script (path under files/), apt packages it needs, timer interval
 # (omit it for run-at-boot only), optionally `apt_hook: true` to also run after
 # every `apt update` and dpkg run, `requires`: a path that must exist on the host, and `env`: a
