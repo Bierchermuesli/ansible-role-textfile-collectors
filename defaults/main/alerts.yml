@@ -19,6 +19,7 @@
 #   textfile_collectors_alert_zpool_warn_percent  80
 #   textfile_collectors_alert_zpool_crit_percent  90
 #   textfile_collectors_alert_postfix_deferred_backlog  50
+#   textfile_collectors_alert_apt_stale_overlay_seconds 1209600 (14 days)
 
 textfile_collectors_alert_rules:
   # ── apt_info / deleted_libraries ─────────────────────────────────────────
@@ -61,8 +62,15 @@ textfile_collectors_alert_rules:
 
       # Without a fresh cache every other apt metric on the host is stale in a
       # way that looks like good news: zero pending upgrades.
+      # A read-only root (RAM overlay over /) only updates in maintenance
+      # windows, so those hosts get a longer leash instead of no alert.
       - alert: AptCacheStale
-        expr: time() - apt_package_cache_timestamp_seconds{ {{ textfile_collectors_alert_selector | default('') }} } > 172800
+        expr: >-
+          (time() - apt_package_cache_timestamp_seconds{ {{ textfile_collectors_alert_selector | default('') }} } > 172800
+             unless on(instance) node_filesystem_size_bytes{mountpoint="/", fstype="overlay"})
+          or
+          (time() - apt_package_cache_timestamp_seconds{ {{ textfile_collectors_alert_selector | default('') }} }
+             > {{ textfile_collectors_alert_apt_stale_overlay_seconds | default(1209600) }})
         for: 1h
         labels:
           severity: warning
