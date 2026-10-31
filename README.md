@@ -83,7 +83,7 @@ textfile_collectors_custom:
 
 | name | what it answers | needs |
 |---|---|---|
-| `apt_info` | pending/held upgrades per origin, reboot required, apt cache age | `python3-apt`, `python3-prometheus-client` |
+| `apt_info` | pending/held upgrades per origin, reboot required, apt cache age | `dpkg-query`, `apt-cache` (no Python) |
 | `deleted_libraries` | processes still mapping deleted libs, i.e. restart needed | `python3-prometheus-client` |
 | `smartmon` | SMART attributes and self-test results | `smartmontools`, real disks |
 | `nvme_metrics` | NVMe wear, spare, media errors | `nvme-cli` >= 2.4 |
@@ -153,6 +153,20 @@ Thresholds are overridable variables (`textfile_collectors_alert_*`), listed at 
   every `apt update` and dpkg run, manual ones included, plus once at boot. If
   apt stops running, `apt_package_cache_timestamp_seconds` freezes and
   `AptCacheStale` fires.
+- `apt_info` is our own shell script (`files/apt_info.sh`), not upstream's
+  `apt_info.py`. The Python version is a poor fit for counting a handful of
+  upgrades: python-apt builds a Python object for every package in the
+  archive (~60k on Raspbian) and walks them several times. On a Pi 1 that is
+  ~1 min of CPU per run (cache load 5 s, the walks 49 s) and it needs
+  `python3-prometheus-client` on every host. The shell version reads the same
+  data from `dpkg-query` and `apt-cache policy`: 25 s on the Pi 1, ~2 s on a
+  laptop, no Python. Same metric names, labels and values, compared sample for
+  sample against `apt_info.py` on Debian 12, 13 and sid hosts with security,
+  updates and third-party origins pending. Differences: no phased-update
+  filter (Debian and Raspbian don't phase) and no `--exclude`.
+  Both are slow if apt itself is: a `/regex/` pin in `preferences.d` made
+  every `apt-cache policy` take 187 s instead of 1 s on that Pi. Pin exact
+  package names.
 - Upstream scripts are Apache-2.0, see `files/upstream/UPSTREAM.md` for the
   pinned commit and local patches.
 

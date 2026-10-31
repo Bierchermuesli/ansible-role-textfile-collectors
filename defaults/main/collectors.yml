@@ -21,7 +21,8 @@ textfile_collectors:
 textfile_collectors_randomized_delay: 5min
 
 # TimeoutStartSec for every collector unit; a registry entry can set its own
-# `timeout`. apt_info alone needs ~2 min of CPU on an ARMv6 Pi 1.
+# `timeout`. Slow hosts may need more: the first apt call after a dpkg change
+# rebuilds apt's binary cache, which takes minutes on a Pi 1.
 textfile_collectors_timeout: 2min
 
 # name -> script (path under files/), apt packages it needs, timer interval
@@ -41,8 +42,10 @@ textfile_collectors_registry:
     # or a broken hook freezes apt_package_cache_timestamp_seconds, which is
     # exactly what AptCacheStale watches - one alert for the whole chain.
     # The boot run resets node_reboot_required after a reboot.
-    script: upstream/apt_info.py
-    packages: [python3-apt, python3-prometheus-client]
+    # Own shell port of upstream's apt_info.py, same metrics and labels; see
+    # the README for why the Python version is gone.
+    script: apt_info.sh
+    packages: []
     apt_hook: true
   deleted_libraries:
     script: upstream/deleted_libraries.py

@@ -21,18 +21,7 @@ diff before committing, and re-apply or drop each local patch.
 
 ## Local patches
 
-### apt_info.py — guard `Package.phasing_applied`
+### apt_info.py — dropped
 
-Upstream added the phasing filter in 9784008 ("Hide packages if phasing is
-being applied", #220) with no version guard. python-apt only exposes that API
-since 2.7.11, so on Debian 12 (python-apt 2.6.0) every package raises
-AttributeError and the script aborts in its first writer — the host emits no
-apt metrics at all, not just no pending-upgrade count.
-
-We compute `hasattr` once at import and fall back to "nothing is phased",
-which is what the script did before that commit. Upstream's only fix is in
-PR #269, an unmerged rewrite that drops the feature outright; this keeps it
-wherever the API exists.
-
-Drop this patch once no Debian 12 hosts are left (bookworm LTS ends
-2028-06-30) or once upstream ships its own guard.
+Replaced by our own `files/apt_info.sh` (same metrics, no python-apt; see the
+role README). The phasing guard that used to live here went with it.
