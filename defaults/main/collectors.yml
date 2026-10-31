@@ -48,8 +48,10 @@ textfile_collectors_registry:
     packages: []
     apt_hook: true
   deleted_libraries:
-    script: upstream/deleted_libraries.py
-    packages: [python3-prometheus-client]
+    # Own shell port, same metric; counts every deleted library per process
+    # (upstream only the first one), see the README.
+    script: deleted_libraries.sh
+    packages: []
     interval: 1h
   smartmon:
     script: upstream/smartmon.sh

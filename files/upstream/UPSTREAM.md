@@ -25,3 +25,9 @@ diff before committing, and re-apply or drop each local patch.
 
 Replaced by our own `files/apt_info.sh` (same metrics, no python-apt; see the
 role README). The phasing guard that used to live here went with it.
+
+### deleted_libraries.py — dropped
+
+Replaced by our own `files/deleted_libraries.sh`. Upstream only counts the
+first deleted library per process (indentation slip, still on master at the
+time of writing); see the role README.

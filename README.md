@@ -84,7 +84,7 @@ textfile_collectors_custom:
 | name | what it answers | needs |
 |---|---|---|
 | `apt_info` | pending/held upgrades per origin, reboot required, apt cache age | `dpkg-query`, `apt-cache` (no Python) |
-| `deleted_libraries` | processes still mapping deleted libs, i.e. restart needed | `python3-prometheus-client` |
+| `deleted_libraries` | processes still mapping deleted libs, i.e. restart needed | `grep`, `awk` (no Python) |
 | `smartmon` | SMART attributes and self-test results | `smartmontools`, real disks |
 | `nvme_metrics` | NVMe wear, spare, media errors | `nvme-cli` >= 2.4 |
 | `zfs_zpool` | pool health/capacity, dataset usage | zfsutils, a pool |
@@ -167,6 +167,14 @@ Thresholds are overridable variables (`textfile_collectors_alert_*`), listed at 
   Both are slow if apt itself is: a `/regex/` pin in `preferences.d` made
   every `apt-cache policy` take 187 s instead of 1 s on that Pi. Pin exact
   package names.
+- `deleted_libraries` is our own shell script too (`files/deleted_libraries.sh`).
+  Upstream's `deleted_libraries.py` has an indentation bug (still on master):
+  the counting is nested under "first time this process is seen", so it only
+  records the **first** deleted library of each process. On a laptop after
+  upgrades it reported 3 libraries / 15 process-library pairs where there were
+  14 / 75. The shell version counts all of them and matches upstream with the
+  indentation fixed, sample for sample, under mawk and gawk. Expect higher
+  numbers than before, not more stale processes.
 - Upstream scripts are Apache-2.0, see `files/upstream/UPSTREAM.md` for the
   pinned commit and local patches.
 
